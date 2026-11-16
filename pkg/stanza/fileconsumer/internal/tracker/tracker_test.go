@@ -4,6 +4,8 @@
 package tracker
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -206,4 +208,27 @@ func newTestFileTracker(t *testing.T) *fileTracker {
 	ft, ok := tr.(*fileTracker)
 	require.True(t, ok, "NewFileTracker should return *fileTracker")
 	return ft
+}
+
+func TestFileTrackerAddUnmatchedClosesDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	open := func(name string) *os.File {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte("same content"), 0o600))
+		f, err := os.Open(path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = f.Close() })
+		return f
+	}
+	first, dup := open("first.log"), open("dup.log")
+
+	ft := newTestFileTracker(t)
+	ft.AddUnmatched(first, fingerprint.New([]byte("same content")))
+	ft.AddUnmatched(dup, fingerprint.New([]byte("same content")))
+
+	require.Equal(t, []*os.File{first}, ft.unmatchedFiles)
+	_, err := first.Stat()
+	require.NoError(t, err, "retained file must stay open")
+	_, err = dup.Stat()
+	require.ErrorIs(t, err, os.ErrClosed, "duplicate file handle must be closed")
 }
